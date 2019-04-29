@@ -97,7 +97,7 @@ func (j JSONNode) ToXML() string {
 				returnString += newNode.ToXML()
 				returnString += "]]>"
 			} else {
-				if attrs, ok := v.(map[string]interface{})["attr:"]; ok {
+				if attrs, ok := v.(map[string]interface{})["attr"]; ok {
 					returnString += "<" + k
 
 					for attrKey, attrVal := range attrs.(map[string]interface{}) {
@@ -105,7 +105,13 @@ func (j JSONNode) ToXML() string {
 						returnString += attrVal.(string) + "\""
 					}
 
-					returnString += " />"
+					if data, ok := v.(map[string]interface{})["data"]; ok {
+						returnString += ">"
+						returnString += data.(string)
+						returnString += "</" + k + ">"
+					} else {
+						returnString += " />"
+					}
 				} else {
 					returnString += "<" + k + ">"
 					returnString += newNode.ToXML()

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cane-project/account"
 	"cane-project/auth"
 	"cane-project/database"
 	"cane-project/model"
@@ -17,38 +18,55 @@ import (
 	"github.com/fatih/structs"
 	"github.com/go-chi/chi"
 	"github.com/mitchellh/mapstructure"
-	"github.com/mongodb/mongo-go-driver/bson/primitive"
-	"github.com/mongodb/mongo-go-driver/mongo/options"
+
+	//"github.com/mongodb/mongo-go-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	//"github.com/mongodb/mongo-go-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// APITypes Variable
-var APITypes []string
+// API Alias
+type API model.API
 
-func init() {
-	APITypes = []string{
-		"xml",
-		"json",
-	}
+// JSONBody Alias
+type JSONBody map[string]interface{}
+
+// APITypes Slice
+var APITypes = []string{
+	"XML",
+	"JSON",
+}
+
+// APIMethods Slice
+var APIMethods = []string{
+	"POST",
+	"GET",
+	"PATCH",
+	"DELETE",
 }
 
 // CreateAPI Function
 func CreateAPI(w http.ResponseWriter, r *http.Request) {
-	var api model.API
+	var api API
 
-	json.NewDecoder(r.Body).Decode(&api)
+	decodeErr := json.NewDecoder(r.Body).Decode(&api)
 
-	api.Body = strings.Replace(api.Body, "\n", "", -1)
-	api.Body = strings.Replace(api.Body, "\\", "", -1)
-
-	accountFilter := primitive.M{
-		"name": api.DeviceAccount,
+	if decodeErr != nil {
+		fmt.Println(decodeErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error decoding json body")
+		return
 	}
 
-	_, accountErr := database.FindOne("accounts", "devices", accountFilter)
+	// Cleanup Body & Method fields
+	api.Body = strings.Replace(api.Body, "\n", "", -1)
+	api.Body = strings.Replace(api.Body, "\\", "", -1)
+	// api.Method = strings.ToUpper(api.Method)
 
-	if accountErr != nil {
-		fmt.Println(accountErr)
-		util.RespondWithError(w, http.StatusBadRequest, "no such account")
+	validErr := api.Valid()
+
+	if validErr != nil {
+		fmt.Println(validErr)
+		util.RespondWithError(w, http.StatusBadRequest, validErr.Error())
 		return
 	}
 
@@ -59,7 +77,6 @@ func CreateAPI(w http.ResponseWriter, r *http.Request) {
 	_, existErr := database.FindOne("apis", api.DeviceAccount, existFilter)
 
 	if existErr == nil {
-		fmt.Println(existErr)
 		util.RespondWithError(w, http.StatusBadRequest, "api already exists")
 		return
 	}
@@ -67,27 +84,41 @@ func CreateAPI(w http.ResponseWriter, r *http.Request) {
 	_, saveErr := database.Save("apis", api.DeviceAccount, api)
 
 	if saveErr != nil {
-		fmt.Println(saveErr)
-		util.RespondWithError(w, http.StatusBadRequest, "error saving api")
+		util.RespondWithError(w, http.StatusBadRequest, "error saving api to database")
 		return
 	}
-
-	// api.ID = saveID.(primitive.ObjectID)
-
-	// foundVal, _ := database.FindOne("apis", api.DeviceAccount, existFilter)
 
 	util.RespondwithString(w, http.StatusCreated, "")
 }
 
 // UpdateAPI Function
 func UpdateAPI(w http.ResponseWriter, r *http.Request) {
-	var originalAPI model.API
-	var patchAPI map[string]interface{}
+	var currAPI API
+	var jBody JSONBody
 
 	apiAccount := chi.URLParam(r, "devicename")
 	apiName := chi.URLParam(r, "apiname")
 
-	json.NewDecoder(r.Body).Decode(&patchAPI)
+	decodeErr := json.NewDecoder(r.Body).Decode(&jBody)
+
+	if decodeErr != nil {
+		fmt.Println(decodeErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error decoding json body")
+		return
+	}
+
+	api, apiErr := jBody.ToAPI()
+
+	if apiErr != nil {
+		fmt.Println(apiErr)
+		util.RespondWithError(w, http.StatusBadRequest, apiErr.Error())
+		return
+	}
+
+	// Cleanup Body & Method fields
+	api.Body = strings.Replace(api.Body, "\n", "", -1)
+	api.Body = strings.Replace(api.Body, "\\", "", -1)
+	// api.Method = strings.ToUpper(api.Method)
 
 	accountFilter := primitive.M{
 		"name": apiAccount,
@@ -113,18 +144,37 @@ func UpdateAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mapstructure.Decode(loadVal, &originalAPI)
+	mapstructure.Decode(loadVal, &currAPI)
 
-	originalAPI.Method = patchAPI["method"].(string)
-	originalAPI.URL = patchAPI["url"].(string)
-	originalAPI.Body = patchAPI["body"].(string)
-	originalAPI.Type = patchAPI["type"].(string)
+	// if api.Method != "" {
+	// 	currAPI.Method = api.Method
+	// }
 
-	updatedAPI := structs.Map(originalAPI)
+	if api.Path != "" {
+		currAPI.Path = api.Path
+	}
 
-	delete(updatedAPI, "ID")
+	if api.Body != "" {
+		currAPI.Body = api.Body
+	}
 
-	_, saveErr := database.FindAndReplace("apis", apiAccount, loadFilter, updatedAPI)
+	if api.Type != "" {
+		currAPI.Type = api.Type
+	}
+
+	// updatedAPI := structs.Map(originalAPI)
+
+	// delete(updatedAPI, "ID")
+
+	validErr := currAPI.Valid()
+
+	if validErr != nil {
+		fmt.Println(validErr)
+		util.RespondWithError(w, http.StatusBadRequest, validErr.Error())
+		return
+	}
+
+	_, saveErr := database.FindAndReplace("apis", apiAccount, loadFilter, structs.Map(currAPI))
 
 	if saveErr != nil {
 		fmt.Println(saveErr)
@@ -159,6 +209,8 @@ func DeleteAPI(w http.ResponseWriter, r *http.Request) {
 		util.RespondWithError(w, http.StatusBadRequest, "api not found")
 		return
 	}
+
+	// Add a check if this is the last API, if so, drop the collection
 
 	util.RespondwithString(w, http.StatusOK, "")
 }
@@ -205,7 +257,7 @@ func GetAPIFromDB(apiAccount string, apiName string) (model.API, error) {
 }
 
 // CallAPI Function
-func CallAPI(targetAPI model.API) (*http.Response, error) {
+func CallAPI(targetAPI model.API, stepMethod string, queryParams url.Values, headerVals map[string]string, stepBody string) (*http.Response, error) {
 	transport := &http.Transport{}
 	client := &http.Client{}
 
@@ -217,22 +269,6 @@ func CallAPI(targetAPI model.API) (*http.Response, error) {
 	if err != nil {
 		fmt.Println("Invalid proxy URL format: ", util.ProxyURL)
 	}
-
-	// if util.IgnoreSSL {
-	// 	transport = &http.Transport{
-	// 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	// 	}
-	// }
-
-	// Add proxy settings to the HTTP Transport object
-	// if len(proxyURL.String()) > 0 {
-	// 	transport.Proxy = http.ProxyURL(proxyURL)
-	// }
-
-	// client = &http.Client{
-	// 	Transport: transport,
-	// 	Timeout:   30 * time.Second,
-	// }
 
 	deviceFilter := primitive.M{
 		"name": targetAPI.DeviceAccount,
@@ -256,11 +292,13 @@ func CallAPI(targetAPI model.API) (*http.Response, error) {
 
 	switch targetDevice.AuthType {
 	case "none":
-		req, reqErr = auth.NoAuth(targetAPI)
+		req, reqErr = auth.NoAuth(targetAPI, stepMethod, queryParams, stepBody)
 	case "basic":
-		req, reqErr = auth.BasicAuth(targetAPI)
+		req, reqErr = auth.BasicAuth(targetAPI, stepMethod, queryParams, stepBody)
 	case "apikey":
-		req, reqErr = auth.APIKeyAuth(targetAPI)
+		req, reqErr = auth.APIKeyAuth(targetAPI, stepMethod, queryParams, stepBody)
+	case "rfc3447":
+		req, reqErr = auth.RFC3447Auth(targetAPI, stepMethod, queryParams, stepBody)
 	default:
 		fmt.Println("Invalid AuthType!")
 		return nil, errors.New("invalid authtype")
@@ -284,9 +322,16 @@ func CallAPI(targetAPI model.API) (*http.Response, error) {
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 
+	// Append headers to HTTP request
+	for key, value := range headerVals {
+		req.Header.Add(key, value)
+	}
+
+	fmt.Println("Request Path: " + req.URL.String())
+
 	client = &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second,
+		Timeout:   60 * time.Second,
 	}
 
 	resp, respErr := client.Do(req)
@@ -350,4 +395,75 @@ func GetAPIs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	util.RespondwithJSON(w, http.StatusOK, map[string][]string{"apis": apis})
+}
+
+// ToAPI Function
+func (j JSONBody) ToAPI() (API, error) {
+	var a API
+
+	mapErr := mapstructure.Decode(j, &a)
+
+	if mapErr != nil {
+		return a, errors.New("error unmarshaling api details")
+	}
+
+	return a, nil
+}
+
+// Valid Dunction
+func (a API) Valid() error {
+
+	if a.Name == "" {
+		return errors.New("name cannot be empty")
+	}
+
+	if a.DeviceAccount == "" {
+		return errors.New("deviceAccount cannot be empty")
+	}
+
+	_, deviceErr := account.GetDeviceFromDB(a.DeviceAccount)
+
+	if deviceErr != nil {
+		return errors.New("target deviceAccount does not exist")
+	}
+
+	// if !ValidMethod(a.Method) {
+	// 	return errors.New("invalid method")
+	// }
+
+	if a.Path == "" {
+		return errors.New("url cannot be empty")
+	}
+
+	// if a.Body == "" && (a.Method == "POST" || a.Method == "PATCH") {
+	// 	return errors.New("body cannot be empty with POST & PATCH")
+	// }
+
+	if !ValidType(a.Type) {
+		return errors.New("type cannot be empty")
+	}
+
+	return nil
+}
+
+// ValidMethod Function
+func ValidMethod(method string) bool {
+	for _, apiMethod := range APIMethods {
+		if method == apiMethod {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ValidType Function
+func ValidType(aType string) bool {
+	for _, apiType := range APITypes {
+		if aType == apiType {
+			return true
+		}
+	}
+
+	return false
 }

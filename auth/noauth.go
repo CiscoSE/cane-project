@@ -11,8 +11,9 @@ import (
 )
 
 // NoAuth Function
-func NoAuth(api model.API) (*http.Request, error) {
+func NoAuth(api model.API, method string, queryParams url.Values, body string) (*http.Request, error) {
 	device, deviceErr := account.GetDeviceFromDB(api.DeviceAccount)
+	var queryPath string
 
 	if deviceErr != nil {
 		log.Print(deviceErr)
@@ -20,17 +21,23 @@ func NoAuth(api model.API) (*http.Request, error) {
 		return nil, deviceErr
 	}
 
-	host, err := url.Parse(device.URL)
+	host, err := url.Parse(device.BaseURL)
 	if err != nil {
 		panic("Cannot parse *host*!")
 	}
 
-	targetMethod := strings.ToUpper(api.Method)
+	targetMethod := strings.ToUpper(method)
 
-	targetURL := host.String() + api.URL
+	// Encode Query Params and append to resourcePath
+	if len(queryParams) != 0 && targetMethod == "GET" {
+		encodedQuery := queryParams.Encode()
+		queryPath = "?" + strings.Replace(encodedQuery, "+", "%20", -1)
+	}
+
+	targetURL := host.String() + api.Path + queryPath
 
 	// Create HTTP request
-	req, err := http.NewRequest(targetMethod, targetURL, strings.NewReader(api.Body))
+	req, err := http.NewRequest(targetMethod, targetURL, strings.NewReader(body))
 
 	if err != nil {
 		log.Print(err)

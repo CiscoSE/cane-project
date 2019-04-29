@@ -4,109 +4,64 @@ import (
 	"cane-project/database"
 	"cane-project/model"
 	"cane-project/util"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 
 	"github.com/fatih/structs"
 
-	"github.com/mongodb/mongo-go-driver/mongo/options"
+	//"github.com/mongodb/mongo-go-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/mitchellh/mapstructure"
 
 	"github.com/go-chi/chi"
-	"github.com/mongodb/mongo-go-driver/bson/primitive"
-	"github.com/tidwall/gjson"
+	//"github.com/mongodb/mongo-go-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // CreateDevice Function
 func CreateDevice(w http.ResponseWriter, r *http.Request) {
-	var device model.DeviceAccount
-	// var authErr error
-	// var authSave map[string]interface{}
+	var jBody JSONBody
 
-	bodyBytes, bodyErr := ioutil.ReadAll(r.Body)
-	target := string(bodyBytes)
+	decodeErr := json.NewDecoder(r.Body).Decode(&jBody)
 
-	// jsonErr := json.NewDecoder(r.Body).Decode(&target)
-
-	if bodyErr != nil {
-		fmt.Println(bodyErr)
-		util.RespondWithError(w, http.StatusBadRequest, "error decoding body")
+	if decodeErr != nil {
+		fmt.Println(decodeErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error decoding json body")
 		return
 	}
 
-	authType := gjson.Get(target, "device.authType").String()
-	// authInfo := gjson.Get(target, "auth").Value()
-	authInfo := gjson.Get(target, "auth").Value()
-	deviceInfo := gjson.Get(target, "device").Value()
-
-	// switch authType {
-	// case "none":
-	// 	authInfo = primitive.M{}
-	// case "basic":
-	// 	var basicAuth model.BasicAuth
-	// 	authErr = mapstructure.Decode(authInfo, &basicAuth)
-	// case "session":
-	// 	var sessionAuth model.SessionAuth
-	// 	authErr = mapstructure.Decode(authInfo, &sessionAuth)
-	// case "apikey":
-	// 	var apiKeyAuth model.APIKeyAuth
-	// 	authErr = mapstructure.Decode(authInfo, &apiKeyAuth)
-	// case "rfc3447":
-	// 	var rfc3447Auth model.BasicAuth
-	// 	authErr = mapstructure.Decode(authInfo, &rfc3447Auth)
-	// default:
-	// 	util.RespondWithError(w, http.StatusBadRequest, "invalid auth type")
-	// 	return
-	// }
-
-	authValid, authErr := ValidateAuth(authType, authInfo.(map[string]interface{}))
-
-	if !authValid {
-		fmt.Println(authErr)
-		util.RespondWithError(w, http.StatusBadRequest, authErr.Error())
+	if len(jBody) != 5 {
+		util.RespondWithError(w, http.StatusBadRequest, "invalid number of keys in device body")
 		return
 	}
 
-	marshalErr := mapstructure.Decode(deviceInfo, &device)
+	device, deviceErr := jBody.ToDevice()
 
-	if marshalErr != nil {
-		fmt.Println(marshalErr)
-		util.RespondWithError(w, http.StatusBadRequest, "invalid device details")
+	if deviceErr != nil {
+		fmt.Println(deviceErr)
+		util.RespondWithError(w, http.StatusBadRequest, deviceErr.Error())
 		return
 	}
 
-	filter := primitive.M{
-		"name": device.Name,
-	}
+	deviceValidErr := device.Valid()
 
-	_, findErr := database.FindOne("accounts", "devices", filter)
-
-	if findErr == nil {
-		fmt.Println(findErr)
-		util.RespondWithError(w, http.StatusBadRequest, "existing account")
+	if deviceValidErr != nil {
+		util.RespondWithError(w, http.StatusBadRequest, deviceValidErr.Error())
 		return
 	}
 
-	authID, _ := database.Save("auth", authType, authInfo)
-	device.AuthObj = authID.(primitive.ObjectID)
+	if DeviceExists(device.Name) {
+		util.RespondWithError(w, http.StatusBadRequest, "existing device account")
+		return
+	}
 
-	fmt.Print("Inserted Auth ID: ")
-	fmt.Println(authID.(primitive.ObjectID).Hex())
+	_, deviceSaveErr := database.Save("accounts", "devices", device)
 
-	deviceID, _ := database.Save("accounts", "devices", device)
-	device.ID = deviceID.(primitive.ObjectID)
-
-	fmt.Print("Inserted Device ID: ")
-	fmt.Println(deviceID.(primitive.ObjectID).Hex())
-
-	_, reloadErr := database.FindOne("accounts", "devices", filter)
-
-	if reloadErr != nil {
-		fmt.Println(reloadErr)
-		util.RespondWithError(w, http.StatusBadRequest, "error reloading account")
+	if deviceSaveErr != nil {
+		util.RespondWithError(w, http.StatusBadRequest, "error saving device to database")
 		return
 	}
 
@@ -115,297 +70,124 @@ func CreateDevice(w http.ResponseWriter, r *http.Request) {
 
 // UpdateDevice Function
 func UpdateDevice(w http.ResponseWriter, r *http.Request) {
-	var device model.DeviceAccount
-	var newAuth map[string]interface{}
-	var authErr error
+	var jBody JSONBody
+	var value interface{}
+	var ok bool
 
-	bodyBytes, bodyErr := ioutil.ReadAll(r.Body)
-	target := string(bodyBytes)
+	decodeErr := json.NewDecoder(r.Body).Decode(&jBody)
 
-	if bodyErr != nil {
-		fmt.Println(bodyErr)
-		util.RespondWithError(w, http.StatusBadRequest, "error decoding body")
+	if decodeErr != nil {
+		fmt.Println(decodeErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error decoding json body")
 		return
 	}
 
-	if !gjson.Get(target, "device.name").Exists() {
-		fmt.Println("invalid device name")
-		util.RespondWithError(w, http.StatusBadRequest, "invalid device name")
+	device, deviceErr := jBody.ToDevice()
+
+	if deviceErr != nil {
+		fmt.Println(deviceErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error converting json to device")
 		return
 	}
 
 	deviceFilter := primitive.M{
-		"name": gjson.Get(target, "device.name").String(),
+		"name": chi.URLParam(r, "devicename"),
 	}
 
-	loadDevice, loadErr := database.FindOne("accounts", "devices", deviceFilter)
+	loadDevice, loadDeviceErr := database.FindOne("accounts", "devices", deviceFilter)
 
-	if loadErr != nil {
-		fmt.Println(loadErr)
-		util.RespondWithError(w, http.StatusBadRequest, "no such device")
+	if loadDeviceErr != nil {
+		util.RespondWithError(w, http.StatusBadRequest, "device not found")
 		return
 	}
 
-	mapstructure.Decode(loadDevice, &device)
+	currDevice, currDeviceErr := JSONBody(loadDevice).ToDevice()
 
-	device.URL = gjson.Get(target, "device.url").String()
-
-	authType := gjson.Get(target, "device.authType").String()
-	authInfo := gjson.Get(target, "auth").Value()
-	updatedAuth := gjson.Get(target, "auth").Map()
-
-	if device.AuthType != authType {
-		if !gjson.Get(target, "auth").Exists() {
-			fmt.Println("cannot change authType without providing new auth info")
-			util.RespondWithError(w, http.StatusBadRequest, "authType change without new auth body")
-			return
-		}
-
-		deleteFilter := primitive.M{
-			"_id": device.AuthObj,
-		}
-
-		deleteErr := database.Delete("auth", device.AuthType, deleteFilter)
-
-		if deleteErr != nil {
-			fmt.Println(deleteErr)
-			util.RespondWithError(w, http.StatusBadRequest, "error deleting old auth")
-			return
-		}
-
-		// deviceInfo := gjson.Get(target, "device").Value()
-
-		switch authType {
-		case "none":
-			authInfo = primitive.M{}
-		case "basic":
-			var basicAuth model.BasicAuth
-			authErr = mapstructure.Decode(authInfo, &basicAuth)
-			newAuth = structs.Map(basicAuth)
-		case "session":
-			var sessionAuth model.SessionAuth
-			authErr = mapstructure.Decode(authInfo, &sessionAuth)
-			newAuth = structs.Map(sessionAuth)
-		case "apikey":
-			var apiKeyAuth model.APIKeyAuth
-			authErr = mapstructure.Decode(authInfo, &apiKeyAuth)
-			newAuth = structs.Map(apiKeyAuth)
-		case "rfc3447":
-			var rfc3447Auth model.Rfc3447Auth
-			authErr = mapstructure.Decode(authInfo, &rfc3447Auth)
-			newAuth = structs.Map(rfc3447Auth)
-		default:
-			util.RespondWithError(w, http.StatusBadRequest, "invalid auth type")
-			return
-		}
-
-		fmt.Println("NEWAUTH: ", newAuth)
-
-		if authErr != nil {
-			fmt.Println(authErr)
-			util.RespondWithError(w, http.StatusBadRequest, "invalid auth details")
-			return
-		}
-
-		authID, authIDErr := database.Save("auth", authType, newAuth)
-
-		if authIDErr != nil {
-			fmt.Println(authIDErr)
-			util.RespondWithError(w, http.StatusBadRequest, "error saving replaced auth")
-			return
-		}
-
-		device.AuthObj = authID.(primitive.ObjectID)
-		device.AuthType = authType
-	} else if gjson.Get(target, "auth").Exists() {
-		authFilter := primitive.M{
-			"_id": device.AuthObj,
-		}
-
-		loadAuth, loadAuthErr := database.FindOne("auth", device.AuthType, authFilter)
-
-		if loadAuthErr != nil {
-			fmt.Println(loadAuthErr)
-			util.RespondWithError(w, http.StatusBadRequest, "no such auth")
-			return
-		}
-
-		for k := range loadAuth {
-			loadAuth[k] = updatedAuth[k]
-		}
-
-		delete(loadAuth, "_id")
-
-		_, replaceAuthErr := database.FindAndReplace("auth", device.AuthType, authFilter, loadAuth)
-
-		if replaceAuthErr != nil {
-			fmt.Println(replaceAuthErr)
-			util.RespondWithError(w, http.StatusBadRequest, "error saving updated auth")
-			return
-		}
+	if currDeviceErr != nil {
+		util.RespondWithError(w, http.StatusBadRequest, "error unmarshaling device details")
+		return
 	}
 
-	_, updatedErr := database.FindAndReplace("accounts", "devices", deviceFilter, structs.Map(device))
+	value, ok = jBody["name"]
+	if ok {
+		util.RespondWithError(w, http.StatusBadRequest, "cannot modify device name")
+		return
+	}
+
+	if device.Name != "" {
+		currDevice.Name = device.Name
+	}
+
+	if device.BaseURL != "" {
+		currDevice.BaseURL = device.BaseURL
+	}
+
+	if device.AuthType != "" {
+		currDevice.AuthType = device.AuthType
+	}
+
+	value, ok = jBody["requireProxy"]
+	if ok {
+		currDevice.RequireProxy = value.(bool)
+	}
+
+	if device.AuthObj != nil {
+		currDevice.AuthObj = device.AuthObj
+	}
+
+	validErr := currDevice.Valid()
+
+	if validErr != nil {
+		util.RespondWithError(w, http.StatusBadRequest, validErr.Error())
+		return
+	}
+
+	_, updatedErr := database.FindAndReplace("accounts", "devices", deviceFilter, structs.Map(currDevice))
 
 	if updatedErr != nil {
-		fmt.Println(updatedErr)
-		util.RespondWithError(w, http.StatusBadRequest, "error saving updated device")
+		util.RespondWithError(w, http.StatusBadRequest, "error saving updated device to database")
 		return
 	}
-
-	// foundVal, _ := database.FindOne("accounts", "devices", filter)
 
 	util.RespondwithString(w, http.StatusOK, "")
 }
 
 // DeleteDevice Function
 func DeleteDevice(w http.ResponseWriter, r *http.Request) {
+	deviceName := chi.URLParam(r, "devicename")
+
 	deviceFilter := primitive.M{
-		"name": chi.URLParam(r, "devicename"),
+		"name": deviceName,
 	}
 
-	findVal, findErr := database.FindOne("accounts", "devices", deviceFilter)
+	_, findErr := GetDeviceFromDB(deviceName)
 
 	if findErr != nil {
-		fmt.Println(findErr)
 		util.RespondWithError(w, http.StatusBadRequest, "device not found")
+		return
+	}
+
+	// Add in capability for query parameter force=true to remove device & all dependents
+	_, depsErr := database.FindOne("apis", deviceName, deviceFilter)
+
+	if depsErr == nil {
+		util.RespondWithError(w, http.StatusBadRequest, "cannot delete device while dependent apis exist")
 		return
 	}
 
 	deleteDeviceErr := database.Delete("accounts", "devices", deviceFilter)
 
 	if deleteDeviceErr != nil {
-		fmt.Println(deleteDeviceErr)
-		util.RespondWithError(w, http.StatusBadRequest, "user not found")
-		return
-	}
-
-	authFilter := primitive.M{
-		"_id": findVal["authObj"].(primitive.ObjectID),
-	}
-
-	deleteAuthErr := database.Delete("auth", findVal["authType"].(string), authFilter)
-
-	if deleteAuthErr != nil {
-		fmt.Println(deleteAuthErr)
-		util.RespondWithError(w, http.StatusBadRequest, "error deleting device auth")
+		util.RespondWithError(w, http.StatusBadRequest, "device not found")
 		return
 	}
 
 	util.RespondwithString(w, http.StatusOK, "")
 }
 
-// ValidateAuth Function
-func ValidateAuth(authType string, authObj map[string]interface{}) (bool, error) {
-	var value interface{}
-	var ok bool
-
-	switch authType {
-	case "none":
-		if len(authObj) != 0 {
-			return false, errors.New("authbody provided with authtype of none")
-		}
-	case "basic":
-		if len(authObj) != 2 {
-			return false, errors.New("invalid number of keys in auth body")
-		}
-
-		value, ok = authObj["username"]
-		if !ok {
-			return false, errors.New("auth is missing username field")
-		} else if value == nil {
-			return false, errors.New("username cannot be empty")
-		}
-
-		value, ok = authObj["password"]
-		if !ok {
-			return false, errors.New("auth is missing password field")
-		} else if value == nil {
-			return false, errors.New("password cannot be empty")
-		}
-	case "session":
-		if len(authObj) != 5 {
-			return false, errors.New("invalid number of keys in auth body")
-		}
-
-		value, ok = authObj["username"]
-		if !ok {
-			return false, errors.New("auth is missing username field")
-		} else if value == nil {
-			return false, errors.New("username cannot be empty")
-		}
-
-		value, ok = authObj["password"]
-		if !ok {
-			return false, errors.New("auth is missing password field")
-		} else if value == nil {
-			return false, errors.New("username cannot be empty")
-		}
-
-		value, ok = authObj["authBody"]
-		if !ok {
-			return false, errors.New("auth is missing authBody field")
-		} else if value == nil {
-			return false, errors.New("authbody cannot be empty")
-		}
-
-		value, ok = authObj["authBodyMap"]
-		if !ok {
-			return false, errors.New("auth is missing authBodyMap field")
-		} else if value == nil {
-			return false, errors.New("authbodymap cannot be empty")
-		}
-
-		value, ok = authObj["cookieLifetime"]
-		if !ok {
-			return false, errors.New("auth is missing cookieLifetime field")
-		}
-	case "apikey":
-		if len(authObj) != 2 {
-			return false, errors.New("invalid number of keys in auth body")
-		}
-
-		value, ok = authObj["header"]
-		if !ok {
-			return false, errors.New("auth is missing header field")
-		} else if value == nil {
-			return false, errors.New("header cannot be empty")
-		}
-
-		value, ok = authObj["key"]
-		if !ok {
-			return false, errors.New("auth is missing key field")
-		} else if value == nil {
-			return false, errors.New("key cannot be empty")
-		}
-	case "rfc3447":
-		if len(authObj) != 2 {
-			return false, errors.New("invalid number of keys in auth body")
-		}
-
-		value, ok = authObj["publicKey"]
-		if !ok {
-			return false, errors.New("auth is missing publicKey field")
-		} else if value == nil {
-			return false, errors.New("publickey cannot be empty")
-		}
-
-		value, ok = authObj["privateKey"]
-		if !ok {
-			return false, errors.New("auth is missing privateKey field")
-		} else if value == nil {
-			return false, errors.New("privatekey cannot be empty")
-		}
-	default:
-		return false, errors.New("invalid auth type")
-	}
-
-	return true, nil
-}
-
 // GetDevice Function
 func GetDevice(w http.ResponseWriter, r *http.Request) {
-	var authType string
+	// var authType string
 
 	filter := primitive.M{
 		"name": chi.URLParam(r, "devicename"),
@@ -414,35 +196,13 @@ func GetDevice(w http.ResponseWriter, r *http.Request) {
 	findDeviceVal, findDeviceErr := database.FindOne("accounts", "devices", filter)
 
 	if findDeviceErr != nil {
-		fmt.Println(findDeviceErr)
 		util.RespondWithError(w, http.StatusBadRequest, "device not found")
 		return
 	}
 
-	authType = findDeviceVal["authType"].(string)
-
-	filter = primitive.M{
-		"_id": findDeviceVal["authObj"],
-	}
-
-	findAuthVal, findAuthErr := database.FindOne("auth", authType, filter)
-
-	if findAuthErr != nil {
-		fmt.Println(findAuthErr)
-		util.RespondWithError(w, http.StatusBadRequest, "auth object not found")
-		return
-	}
-
-	delete(findAuthVal, "_id")
 	delete(findDeviceVal, "_id")
-	delete(findDeviceVal, "authObj")
 
-	response := map[string]interface{}{
-		"device": findDeviceVal,
-		"auth":   findAuthVal,
-	}
-
-	util.RespondwithJSON(w, http.StatusOK, response)
+	util.RespondwithJSON(w, http.StatusOK, findDeviceVal)
 }
 
 // GetDevices Function
@@ -460,7 +220,6 @@ func GetDevices(w http.ResponseWriter, r *http.Request) {
 	findVals, findErr := database.FindAll("accounts", "devices", primitive.M{}, opts)
 
 	if findErr != nil {
-		fmt.Println(findErr)
 		util.RespondWithError(w, http.StatusBadRequest, "no devices found")
 		return
 	}
@@ -483,70 +242,13 @@ func GetDeviceID(deviceName string) (primitive.ObjectID, error) {
 	findVal, findErr := database.FindOne("accounts", "devices", filter)
 
 	if findErr != nil {
-		fmt.Println(findErr)
-		return deviceID, findErr
+		return deviceID, errors.New("device not found")
 	}
 
 	deviceID = findVal["_id"].(primitive.ObjectID)
 
 	return deviceID, nil
 }
-
-// UpdateDevice Function
-// func UpdateDevice(w http.ResponseWriter, r *http.Request) {
-// 	var deviceDetails map[string]interface{}
-// 	var updatedDevice model.DeviceAccount
-
-// 	json.NewDecoder(r.Body).Decode(&deviceDetails)
-
-// 	filter := primitive.M{
-// 		"name": chi.URLParam(r, "devicename"),
-// 	}
-
-// 	findVal, findErr := database.FindOne("accounts", "devices", filter)
-
-// 	if findErr != nil {
-// 		fmt.Println(findErr)
-// 		util.RespondWithError(w, http.StatusBadRequest, "device not found")
-// 		return
-// 	}
-
-// 	mapstructure.Decode(findVal, &updatedDevice)
-
-// 	updatedDevice.Name = deviceDetails["name"].(string)
-// 	updatedDevice.IP = deviceDetails["ip"].(string)
-// 	updatedDevice.AuthType = deviceDetails["authType"].(string)
-
-// 	_, replaceErr := database.ReplaceOne("accounts", "users", filter, structs.Map(updatedUser))
-
-// 	if replaceErr != nil {
-// 		fmt.Println(replaceErr)
-// 		util.RespondWithError(w, http.StatusBadRequest, "error updating user")
-// 		return
-// 	}
-
-// 	util.RespondwithJSON(w, http.StatusOK, updatedUser)
-// }
-
-// GetDevices Function
-// func GetDevices(w http.ResponseWriter, r *http.Request) {
-// 	var opts options.FindOptions
-// 	var deviceList []string
-
-// 	findVal, findErr := database.FindAll("accounts", "devices", primitive.M{}, opts)
-
-// 	if findErr != nil {
-// 		fmt.Println(findErr)
-// 		util.RespondWithError(w, http.StatusBadRequest, "device not found")
-// 		return
-// 	}
-
-// 	for key := range findVal {
-// 		deviceList = append(deviceList, findVal[key]["name"].(string))
-// 	}
-
-// 	util.RespondwithJSON(w, http.StatusOK, map[string][]string{"devices": deviceList})
-// }
 
 // GetDeviceFromDB Function
 func GetDeviceFromDB(deviceName string) (model.DeviceAccount, error) {
@@ -559,16 +261,167 @@ func GetDeviceFromDB(deviceName string) (model.DeviceAccount, error) {
 	findVal, findErr := database.FindOne("accounts", "devices", filter)
 
 	if findErr != nil {
-		fmt.Println(findErr)
-		return device, findErr
+		return device, errors.New("device not found")
 	}
 
 	mapErr := mapstructure.Decode(findVal, &device)
 
 	if mapErr != nil {
-		fmt.Println(mapErr)
-		return device, mapErr
+		return device, errors.New("error unmarshaling device details")
 	}
 
 	return device, nil
+}
+
+// DeviceExists Function
+func DeviceExists(deviceName string) bool {
+	filter := primitive.M{
+		"name": deviceName,
+	}
+
+	_, findErr := database.FindOne("accounts", "devices", filter)
+
+	if findErr == nil {
+		return true
+	}
+
+	return false
+}
+
+// ToDevice Function
+func (j JSONBody) ToDevice() (Device, error) {
+	var d Device
+
+	mapErr := mapstructure.Decode(j, &d)
+
+	if mapErr != nil {
+		return d, errors.New("error unmarshaling device details")
+	}
+
+	return d, nil
+}
+
+// Valid Function for model.DeviceAccount
+func (d *Device) Valid() error {
+	if len(d.Name) == 0 {
+		return errors.New("name cannot be empty")
+	}
+
+	if len(d.BaseURL) == 0 {
+		return errors.New("url cannot be empty")
+	}
+
+	if len(d.AuthType) == 0 {
+		return errors.New("authType cannot be empty")
+	} else if !ValidAuthType(d.AuthType) {
+		return errors.New("invalid authType")
+	}
+
+	authErr := AuthValid(d.AuthType, d.AuthObj)
+
+	if authErr != nil {
+		return authErr
+	}
+
+	return nil
+}
+
+// AuthValid Function
+func AuthValid(authType string, authObj map[string]interface{}) error {
+	switch authType {
+	case "none":
+		if len(authObj) != 0 {
+			return errors.New("authbody provided with authtype of none")
+		}
+	case "basic":
+		var auth BasicAuth
+
+		if len(authObj) != 2 {
+			return errors.New("invalid number of keys in auth body")
+		}
+
+		mapstructure.Decode(authObj, &auth)
+
+		if len(auth.UserName) == 0 {
+			return errors.New("username cannot be empty")
+		}
+
+		if len(auth.Password) == 0 {
+			return errors.New("password cannot be empty")
+		}
+	case "session":
+		var auth SessionAuth
+
+		if len(authObj) != 5 {
+			return errors.New("invalid number of keys in auth body")
+		}
+
+		mapstructure.Decode(authObj, &auth)
+
+		if len(auth.UserName) == 0 {
+			return errors.New("username cannot be empty")
+		}
+
+		if len(auth.Password) == 0 {
+			return errors.New("password cannot be empty")
+		}
+
+		if len(auth.AuthBody) == 0 {
+			return errors.New("authbody cannot be empty")
+		}
+
+		if len(auth.AuthBodyMap) == 0 {
+			return errors.New("authbodymap cannot be empty")
+		}
+
+		if auth.CookieLifetime == 0 {
+			return errors.New("invalid cookieLifetime value")
+		}
+	case "apikey":
+		var auth APIKeyAuth
+
+		if len(authObj) != 2 {
+			return errors.New("invalid number of keys in auth body")
+		}
+
+		mapstructure.Decode(authObj, &auth)
+
+		// if len(auth.Header) == 0 {
+		// 	return errors.New("header cannot be empty")
+		// }
+
+		if len(auth.Key) == 0 {
+			return errors.New("key cannot be empty")
+		}
+	case "rfc3447":
+		var auth RFC3447Auth
+
+		if len(authObj) != 2 {
+			return errors.New("invalid number of keys in auth body")
+		}
+
+		mapstructure.Decode(authObj, &auth)
+
+		if len(auth.PublicKey) == 0 {
+			return errors.New("publickey cannot be empty")
+		}
+
+		if len(auth.PrivateKey) == 0 {
+			return errors.New("privatekey cannot be empty")
+		}
+	default:
+		return errors.New("invalid auth type")
+	}
+
+	return nil
+}
+
+// ValidAuthType Function
+func ValidAuthType(auth string) bool {
+	for _, authType := range AuthTypes {
+		if auth == authType {
+			return true
+		}
+	}
+	return false
 }

@@ -10,7 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mongodb/mongo-go-driver/bson/primitive"
+	//"github.com/mongodb/mongo-go-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // LogMessage Struct
@@ -84,10 +85,9 @@ func main() {
 		canePort += "8005"
 	}
 
-	routing.Routers()
-
 	fmt.Println("Starting router...")
-	// http.ListenAndServe(":8005", logger())
+
+	routing.Routers()
 
 	fmt.Println("Listening on port", canePort)
 

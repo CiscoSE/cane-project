@@ -6,23 +6,35 @@ import (
 	"cane-project/model"
 	"cane-project/util"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/mongodb/mongo-go-driver/mongo/options"
+	//"github.com/mongodb/mongo-go-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"github.com/fatih/structs"
 	"github.com/tidwall/sjson"
 
 	"github.com/mitchellh/mapstructure"
 	"github.com/tidwall/gjson"
 
 	"github.com/go-chi/chi"
-	"github.com/mongodb/mongo-go-driver/bson/primitive"
+	//"github.com/mongodb/mongo-go-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
+
+// Workflow Alias
+type Workflow model.Workflow
+
+// JSONBody Alias
+type JSONBody map[string]interface{}
 
 // CreateWorkflow Function
 func CreateWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -56,11 +68,57 @@ func CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// target.ID = deviceID.(primitive.ObjectID)
-
-	// foundVal, _ := database.FindOne("workflows", "workflow", filter)
-
 	util.RespondwithString(w, http.StatusCreated, "")
+}
+
+// UpdateWorkflow Function
+func UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
+	var jBody JSONBody
+
+	filter := primitive.M{
+		"name": chi.URLParam(r, "workflowname"),
+	}
+
+	_, findErr := database.FindOne("workflows", "workflow", filter)
+
+	if findErr != nil {
+		util.RespondWithError(w, http.StatusBadRequest, "workflow not found")
+		return
+	}
+
+	decodeErr := json.NewDecoder(r.Body).Decode(&jBody)
+
+	if decodeErr != nil {
+		fmt.Println(decodeErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error decoding json body")
+		return
+	}
+
+	// _, replaceErr := database.ReplaceOne("workflows", "workflow", filter, primitive.M(jBody))
+
+	// if replaceErr != nil {
+	// 	fmt.Println(replaceErr)
+	// 	util.RespondWithError(w, http.StatusBadRequest, "error updating workflow in database")
+	// 	return
+	// }
+
+	deleteErr := database.Delete("workflows", "workflow", filter)
+
+	if deleteErr != nil {
+		fmt.Println(deleteErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error deleting workflow in database")
+		return
+	}
+
+	_, replaceErr := database.Save("workflows", "workflow", primitive.M(jBody))
+
+	if replaceErr != nil {
+		fmt.Println(replaceErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error re-creating workflow in database")
+		return
+	}
+
+	util.RespondwithString(w, http.StatusOK, "")
 }
 
 // DeleteWorkflow Function
@@ -123,6 +181,19 @@ func GetWorkflows(w http.ResponseWriter, r *http.Request) {
 	util.RespondwithJSON(w, http.StatusOK, map[string][]string{"workflows": workflows})
 }
 
+// ToWorkflow Function
+func (j JSONBody) ToWorkflow() (Workflow, error) {
+	var w Workflow
+
+	mapErr := mapstructure.Decode(j, &w)
+
+	if mapErr != nil {
+		return w, errors.New("error unmarshaling user details")
+	}
+
+	return w, nil
+}
+
 // CallWorkflow Function
 func CallWorkflow(w http.ResponseWriter, r *http.Request) {
 	var targetWorkflow model.Workflow
@@ -166,21 +237,90 @@ func CallWorkflow(w http.ResponseWriter, r *http.Request) {
 
 // ExecuteWorkflow Function
 func ExecuteWorkflow(stepZero string, targetWorkflow model.Workflow, workflowClaim Claim) {
-	var setData gjson.Result
+	// var setData gjson.Result
 	var stepAPI model.API
 	var stepAPIErr error
 
-	// apiResults := make(map[string]interface{})
 	apiResults := make(map[string]model.StepResult)
+	varPool := make(map[string]map[string]string)
+	zeroMap := make(map[string]interface{})
+
+	bodyBuilder := ""
+	stepHeader := make(map[string]string)
+	var stepQuery url.Values
 
 	fmt.Println("Beginning Step Loop...")
 
 	fmt.Println("Step Zero Body:")
 	fmt.Println(stepZero)
+	fmt.Println("Step Zero Body Length:")
+	fmt.Println(len(stepZero))
+
+	fmt.Println("Unmarshal Step Zero BODY to MAP")
+
+	if len(stepZero) != 0 {
+		decoder := json.NewDecoder(strings.NewReader(stepZero))
+		decoder.UseNumber()
+		zeroErr := decoder.Decode(&zeroMap)
+
+		if zeroErr != nil {
+			fmt.Println("Error unmarshalling Zero BODY to MAP!")
+			fmt.Println(zeroErr)
+			return
+		}
+	} else {
+		fmt.Println("Empty StepZero BODY!")
+	}
+
+	fmt.Println("Zero MAP:")
+	fmt.Println(zeroMap)
+
+	// Add Variables from ZeroMap to VarPool
+	fmt.Println("Adding Variables from ZeroMap...")
+
+	for key, val := range zeroMap {
+		fmt.Print("Mapping Zero Variable: ")
+		fmt.Println(val)
+
+		switch val.(type) {
+		case int, int32, int64:
+			fmt.Println("INT")
+			intVal := strconv.Itoa(val.(int))
+			fmt.Println("Mapping: " + intVal + " as (int)")
+			varPool[key] = map[string]string{intVal: "int"}
+		case json.Number:
+			fmt.Println("JSON NUMBER")
+			jnumVal := fmt.Sprintf("%v", val)
+			fmt.Println("Mapping: " + jnumVal + " as (int)")
+			varPool[key] = map[string]string{jnumVal: "int"}
+		case float32, float64:
+			fmt.Println("FLOAT")
+			floatVal := fmt.Sprintf("%f", val)
+			fmt.Println("Mapping: " + floatVal + " as (float)")
+			varPool[key] = map[string]string{floatVal: "float"}
+		case bool:
+			fmt.Println("BOOL")
+			fmt.Println("Mapping: " + strconv.FormatBool(val.(bool)) + " as (bool)")
+			varPool[key] = map[string]string{strconv.FormatBool(val.(bool)): "bool"}
+		case string:
+			fmt.Println("STRING")
+			fmt.Println("Mapping: " + val.(string) + " as (string)")
+			varPool[key] = map[string]string{val.(string): "string"}
+		default:
+			fmt.Println("UNKNOWN")
+			fmt.Println("Unknown: " + val.(string) + " type (" + reflect.TypeOf(val).String() + ")")
+		}
+	}
+
+	fmt.Println("VarPool MAP:")
+	fmt.Println(varPool)
 
 	// For each step in "STEPS"
 	for i := 0; i < len(targetWorkflow.Steps); i++ {
 		var step model.StepResult
+
+		stepMethod := targetWorkflow.Steps[i].Verb
+		fmt.Println("Step Method: " + stepMethod)
 
 		fmt.Println("Setting API Status to 1...")
 
@@ -195,6 +335,7 @@ func ExecuteWorkflow(stepZero string, targetWorkflow model.Workflow, workflowCla
 		stepAPI, stepAPIErr = api.GetAPIFromDB(targetWorkflow.Steps[i].DeviceAccount, targetWorkflow.Steps[i].APICall)
 
 		if stepAPIErr != nil {
+			fmt.Println("Error getting API from DB...")
 			fmt.Println(stepAPIErr)
 			step.Error = stepAPIErr.Error()
 			step.Status = -1
@@ -202,116 +343,203 @@ func ExecuteWorkflow(stepZero string, targetWorkflow model.Workflow, workflowCla
 			workflowClaim.WorkflowResults = apiResults
 			workflowClaim.CurrentStatus = -1
 			workflowClaim.Save()
-			// util.RespondWithError(w, http.StatusBadRequest, "error loading target API")
 			return
 		}
 
-		step.APICall = stepAPI.Name
-		step.APIAccount = stepAPI.DeviceAccount
+		step.API = structs.Map(stepAPI)
+		delete(step.API, "_id")
+		step.Account = stepAPI.DeviceAccount
 
-		fmt.Println("Beginning VarMap Loop...")
+		// Build BODY string from Map
+		fmt.Println("Building BODY from Map...")
 
-		// For each Variable Map in "VARMAP"
-		for j := 0; j < len(targetWorkflow.Steps[i].VarMap); j++ {
-			for key, val := range targetWorkflow.Steps[i].VarMap[j] {
-				left := strings.Index(key, "{")
-				right := strings.Index(key, "}")
+		bodyBuilder = ""
+		// stepBody = make(map[string]string)
 
-				stepFrom := key[(left + 1):right]
-				fromMap := key[(right + 1):]
+		for bodyCount := 0; bodyCount < len(targetWorkflow.Steps[i].Body); bodyCount++ {
+			for key, val := range targetWorkflow.Steps[i].Body[bodyCount] {
+				if len(util.GetVariables(val)) > 0 {
+					fmt.Print("Found variable(s): ")
+					fmt.Println(util.GetVariables(val))
 
-				fmt.Println("From Step: ", stepFrom)
-				fmt.Println("From Map: ", fromMap)
-				fmt.Println("APIResults:")
-				fmt.Println(apiResults)
+					for _, variable := range util.GetVariables(val) {
+						rawVar := variable
+						rawVar = strings.Replace(rawVar, "{{", "", 1)
+						rawVar = strings.Replace(rawVar, "}}", "", 1)
 
-				if stepFrom == "0" {
-					setData = gjson.Get(stepZero, fromMap)
-				} else if stepFrom == "s" {
-					var gString gjson.Result
-					gString.Str = fromMap
-					gString.Type = gjson.String
-					setData = gString
-				} else if stepFrom == "n" {
-					var gString gjson.Result
-					gString.Num, _ = strconv.ParseFloat(fromMap, 64)
-					gString.Type = gjson.Number
-					setData = gString
-				} else {
-					fmt.Println("Res Body: ", apiResults[stepFrom].ResBody)
-					setData = gjson.Get(apiResults[stepFrom].ResBody, fromMap)
-				}
-
-				var typedData interface{}
-
-				stepAPI.Body = strings.Replace(stepAPI.Body, "\n", "", -1)
-				stepAPI.Body = strings.Replace(stepAPI.Body, "\t", "", -1)
-				stepAPI.Body = strings.Replace(stepAPI.Body, "\r", "", -1)
-				stepAPI.Body = strings.Replace(stepAPI.Body, "\\", "", -1)
-
-				fmt.Println("STRIPPED API BODY:")
-				fmt.Println(stepAPI.Body)
-
-				fmt.Println("Determining TypeData...")
-				fmt.Println("GJSON Results: ", gjson.Get(stepAPI.Body, val))
-
-				if gjson.Get(stepAPI.Body, val).Exists() {
-					switch dataKind := reflect.TypeOf(gjson.Get(stepAPI.Body, val).Value()).Kind(); dataKind {
-					case reflect.Int:
-						fmt.Println("Value: ", val)
-						fmt.Println("Kind: ", dataKind)
-						typedData = setData.Int()
-					case reflect.Float64:
-						fmt.Println("Value: ", val)
-						fmt.Println("Kind: ", dataKind)
-						typedData = setData.Float()
-					case reflect.String:
-						fmt.Println("Value: ", val)
-						fmt.Println("Kind: ", dataKind)
-						typedData = setData.String()
-					default:
-						fmt.Println("Value: ", val)
-						fmt.Println("Unidentified Kind: ", dataKind)
+						if poolVal, ok := varPool[rawVar]; ok {
+							for replaceVar := range poolVal {
+								val = strings.Replace(val, variable, replaceVar, 1)
+							}
+						} else {
+							fmt.Println("ERROR MISSING BODY VARIABLE!!!")
+							// Fail Workflow Here
+						}
 					}
+				}
+
+				var newVal interface{}
+
+				if tempVal, err := strconv.ParseInt(val, 10, 64); err == nil {
+					fmt.Println("Updated BODY VAL is an INT!")
+					newVal = tempVal
+				} else if tempVal, err := strconv.ParseFloat(val, 64); err == nil {
+					fmt.Println("Updated BODY VAL is a FLOAT!")
+					newVal = tempVal
+				} else if strings.ToLower(val) == "false" || strings.ToLower(val) == "true" {
+					fmt.Println("Updated BODY VAL is a BOOL!")
+					newVal, _ = strconv.ParseBool(val)
 				} else {
-					fmt.Println("Mapping Error!")
-					fmt.Println("Step Body:")
-					fmt.Println(stepAPI.Body)
-					output := fmt.Sprintf("Map Value [%s]", val)
-					fmt.Println(output)
-					step.Error = "Invalid mapping data, target value does not exist"
-					step.Status = -1
-					apiResults[strconv.Itoa(i+1)] = step
-					workflowClaim.WorkflowResults = apiResults
-					workflowClaim.CurrentStatus = -1
-					workflowClaim.Save()
-					// util.RespondWithError(w, http.StatusBadRequest, "Invalid mapping data")
-					return
+					fmt.Println("Updated BODY VAL is a STRING!")
+					newVal = val
 				}
 
-				fmt.Println("Setting StepAPI Body...")
-
-				var sjsonSetErr error
-				stepAPI.Body, sjsonSetErr = sjson.Set(stepAPI.Body, val, typedData)
-
-				if sjsonSetErr != nil {
-					fmt.Println(sjsonSetErr)
-					step.Error = sjsonSetErr.Error()
-					step.Status = -1
-					apiResults[strconv.Itoa(i+1)] = step
-					workflowClaim.WorkflowResults = apiResults
-					workflowClaim.CurrentStatus = -1
-					workflowClaim.Save()
-					// util.RespondWithError(w, http.StatusBadRequest, "error mapping api variables")
-					return
-				}
+				bodyBuilder, _ = sjson.Set(bodyBuilder, key, newVal)
 			}
 		}
 
-		fmt.Println("Updated Body: ", stepAPI.Body)
-		step.ReqBody = stepAPI.Body
+		fmt.Println("BodyBuider:")
+		fmt.Println(bodyBuilder)
+		fmt.Println("BodyBuider Length:")
+		fmt.Println(len(bodyBuilder))
 
-		apiResp, apiErr := api.CallAPI(stepAPI)
+		fmt.Println("Parsing BODY to Map...")
+
+		var stepBody = make(map[string]interface{})
+
+		if len(bodyBuilder) != 0 {
+			decoder := json.NewDecoder(strings.NewReader(bodyBuilder))
+			decoder.UseNumber()
+			bodyErr := decoder.Decode(&stepBody)
+
+			if bodyErr != nil {
+				fmt.Println("Error parsing BODY to Map!")
+				return
+			}
+		} else {
+			fmt.Println("Empty BodyBuilder, setting StepBody to {}")
+		}
+
+		fmt.Println("BODY:")
+		fmt.Println(stepBody)
+
+		// Build HEADER from Map
+		fmt.Println("Building HEADER from Map...")
+
+		stepHeader = make(map[string]string)
+
+		for headerCount := 0; headerCount < len(targetWorkflow.Steps[i].Headers); headerCount++ {
+			for key, val := range targetWorkflow.Steps[i].Headers[headerCount] {
+				if len(util.GetVariables(val)) > 0 {
+					fmt.Print("Found variable(s): ")
+					fmt.Println(util.GetVariables(val))
+
+					for _, variable := range util.GetVariables(val) {
+						rawVar := variable
+						rawVar = strings.Replace(rawVar, "{{", "", 1)
+						rawVar = strings.Replace(rawVar, "}}", "", 1)
+
+						if poolVal, ok := varPool[rawVar]; ok {
+							for replaceVar := range poolVal {
+								val = strings.Replace(val, variable, replaceVar, 1)
+							}
+						} else {
+							fmt.Println("ERROR MISSING HEADER VARIABLE!!!")
+							// Fail Workflow Here
+						}
+					}
+				}
+
+				stepHeader[key] = val
+			}
+		}
+
+		fmt.Println("HEADER:")
+		fmt.Println(stepHeader)
+
+		step.ReqHeaders = stepHeader
+
+		// Build QUERY from Map
+		fmt.Println("Building QUERY from Map...")
+
+		stepQuery = make(map[string][]string)
+
+		for queryCount := 0; queryCount < len(targetWorkflow.Steps[i].Query); queryCount++ {
+			for key, val := range targetWorkflow.Steps[i].Query[queryCount] {
+				if len(util.GetVariables(val)) > 0 {
+					fmt.Print("Found variable(s): ")
+					fmt.Println(util.GetVariables(val))
+
+					for _, variable := range util.GetVariables(val) {
+						rawVar := variable
+						rawVar = strings.Replace(rawVar, "{{", "", 1)
+						rawVar = strings.Replace(rawVar, "}}", "", 1)
+
+						if poolVal, ok := varPool[rawVar]; ok {
+							for replaceVar := range poolVal {
+								val = strings.Replace(val, variable, replaceVar, 1)
+							}
+						} else {
+							fmt.Println("ERROR MISSING QUERY VARIABLE!!!")
+							// Fail Workflow Here
+						}
+					}
+				}
+
+				stepQuery.Add(key, val)
+			}
+		}
+
+		fmt.Println("QUERY:")
+		fmt.Println(stepQuery)
+
+		step.ReqQuery = stepQuery
+
+		fmt.Println("Updated Body: ", stepBody) // This doesn't look right...
+		step.ReqBody = stepBody                 // Why is this stepBody vs. stepAPI.Body???
+
+		varMatch := regexp.MustCompile(`([{]{2}[a-zA-Z]*[}]{2}){1}`)
+		searchPath := varMatch.FindString(step.API["path"].(string))
+
+		for searchPath != "" {
+			fmt.Println("SearchPath: " + searchPath)
+
+			val := searchPath
+			val = strings.Replace(val, "{{", "", 1)
+			val = strings.Replace(val, "}}", "", 1)
+
+			fmt.Println("Variable to Replace: " + val)
+			fmt.Println("Current Variable Pool:")
+			fmt.Println(varPool)
+
+			if poolVal, ok := varPool[val]; ok {
+				for replaceVar := range poolVal {
+					fmt.Println("Replace Variable Value: " + replaceVar)
+					step.API["path"] = strings.Replace(step.API["path"].(string), searchPath, replaceVar, 1)
+				}
+			} else {
+				fmt.Println("Replace Variable Not Found!")
+				step.API["path"] = strings.Replace(step.API["path"].(string), searchPath, "<error>", 1)
+			}
+
+			searchPath = varMatch.FindString(step.API["path"].(string))
+		}
+
+		fmt.Println("Updated API Path:")
+		fmt.Println(step.API["path"])
+
+		var targetAPI model.API
+		var bodyString string
+		mapstructure.Decode(step.API, &targetAPI)
+
+		if len(step.ReqBody) > 0 {
+			bodyBytes, _ := json.Marshal(step.ReqBody)
+			bodyString = string(bodyBytes)
+		} else {
+			bodyString = ""
+		}
+
+		apiResp, apiErr := api.CallAPI(targetAPI, stepMethod, stepQuery, stepHeader, bodyString)
 
 		if apiErr != nil {
 			fmt.Println(apiErr)
@@ -321,7 +549,6 @@ func ExecuteWorkflow(stepZero string, targetWorkflow model.Workflow, workflowCla
 			workflowClaim.WorkflowResults = apiResults
 			workflowClaim.CurrentStatus = -1
 			workflowClaim.Save()
-			// util.RespondWithError(w, http.StatusBadRequest, "error executing API")
 			return
 		}
 
@@ -340,7 +567,6 @@ func ExecuteWorkflow(stepZero string, targetWorkflow model.Workflow, workflowCla
 			workflowClaim.WorkflowResults = apiResults
 			workflowClaim.CurrentStatus = -1
 			workflowClaim.Save()
-			// util.RespondWithError(w, http.StatusBadRequest, "error reading response body")
 			return
 		}
 
@@ -349,27 +575,80 @@ func ExecuteWorkflow(stepZero string, targetWorkflow model.Workflow, workflowCla
 
 		step.ResBody = string(respBody)
 
-		// bodyObject := make(map[string]interface{})
-		// marshalErr := json.Unmarshal(respBody, &bodyObject)
+		fmt.Println("Response Status Code:")
+		fmt.Println(apiResp.StatusCode)
 
-		// if marshalErr != nil {
-		// 	fmt.Println(marshalErr)
-		// 	step.Status = -1
-		// 	step.Error = marshalErr.Error()
-		// 	apiResults[strconv.Itoa(i+1)] = step
-		// 	workflowClaim.WorkflowResults = apiResults
-		// 	workflowClaim.CurrentStatus = -1
-		// 	workflowClaim.Save()
-		// 	// util.RespondWithError(w, http.StatusBadRequest, "error parsing response body")
-		// 	return
-		// }
+		step.ResStatus = apiResp.StatusCode
+
+		if apiResp.StatusCode > 299 {
+			fmt.Println("Error! Status code > 299!")
+			step.Error = "Error calling API"
+			step.Status = -1
+			apiResults[strconv.Itoa(i+1)] = step
+			workflowClaim.WorkflowResults = apiResults
+			workflowClaim.CurrentStatus = -1
+			workflowClaim.Save()
+			return
+		}
+
+		if !gjson.Valid(step.ResBody) {
+			fmt.Println("GJSON Reports ResBody is invalid JSON!")
+		}
+
+		// Extract VARIABLES from Response BODY
+		fmt.Println("Extracting VARIABLES from Reponse Body...")
+
+		for varCount := 0; varCount < len(targetWorkflow.Steps[i].Variables); varCount++ {
+			for key, val := range targetWorkflow.Steps[i].Variables[varCount] {
+				fmt.Println("Extracting Variable: " + val)
+
+				varValue := gjson.Get(step.ResBody, val)
+
+				if varValue.Exists() {
+					fmt.Println("(" + val + ") Found! Value: " + varValue.String())
+					fmt.Println("GJSON Type:" + string(varValue.Type.String()))
+
+					switch varKind := reflect.TypeOf(varValue.Value()).Kind(); varKind {
+					case reflect.Int:
+						fmt.Println("Value: ", val)
+						fmt.Println("Kind: ", varKind)
+						varPool[key] = map[string]string{varValue.String(): "int"}
+					case reflect.Float64:
+						fmt.Println("Value: ", val)
+						fmt.Println("Kind: ", varKind)
+						if strings.ContainsAny(varValue.String(), ".") {
+							varPool[key] = map[string]string{varValue.String(): "float"}
+						} else {
+							fmt.Println("No decimal, storing as INT...")
+							varPool[key] = map[string]string{varValue.String(): "int"}
+						}
+					case reflect.String:
+						fmt.Println("Value: ", val)
+						fmt.Println("Kind: ", varKind)
+						varPool[key] = map[string]string{varValue.String(): "string"}
+					default:
+						fmt.Println("Value: ", val)
+						fmt.Println("Unidentified Kind: ", varKind)
+					}
+				} else {
+					fmt.Println("(" + val + ") not found in Response Body!")
+				}
+			}
+		}
+
+		// Complete Workflow Step
+		fmt.Println("Workflow Step (" + strconv.Itoa(i) + ") successfully completed!")
 
 		step.Status = 2
 		apiResults[strconv.Itoa(i+1)] = step
 		workflowClaim.WorkflowResults = apiResults
-		workflowClaim.CurrentStatus = 2
+		// workflowClaim.CurrentStatus = 2
 		workflowClaim.Save()
 	}
 
-	// util.RespondwithJSON(w, http.StatusOK, apiResults)
+	// Complete Workflow
+	fmt.Println("Workflow Execution successfully completed!")
+
+	workflowClaim.CurrentStatus = 2
+	workflowClaim.Save()
 }

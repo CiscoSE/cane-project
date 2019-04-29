@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"cane-project/account"
+	"cane-project/model"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -9,7 +11,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -19,10 +20,10 @@ import (
 	"time"
 )
 
-var host *url.URL
+// var host *url.URL
 
-var privateKey *rsa.PrivateKey
-var publicKey string
+// var privateKey *rsa.PrivateKey
+// var publicKey string
 
 // IntersightResponse Type
 type IntersightResponse map[string][]map[string]interface{}
@@ -38,28 +39,37 @@ var httpVerbs = map[string]bool{
 
 // Loads the RSA private key from a file and assigns it to
 // the privateKey variable
-func getPrivateKey() {
-	b, err := ioutil.ReadFile("keys/private_key.pem")
-	if err != nil {
-		fmt.Print(err)
-	}
-
-	block, _ := pem.Decode(b)
+func loadPrivateKey(keyData string) *rsa.PrivateKey {
+	block, _ := pem.Decode([]byte(keyData))
 	key, _ := x509.ParsePKCS1PrivateKey(block.Bytes)
 
-	privateKey = key
+	return key
 }
+
+// Loads the RSA private key from a file and assigns it to
+// the privateKey variable
+// func getPrivateKey() {
+// 	b, err := ioutil.ReadFile("keys/private_key.pem")
+// 	if err != nil {
+// 		fmt.Print(err)
+// 	}
+
+// 	block, _ := pem.Decode(b)
+// 	key, _ := x509.ParsePKCS1PrivateKey(block.Bytes)
+
+// 	privateKey = key
+// }
 
 // Loads the Intersight KeyID key from a file and assigns it
 // to the publicKey variable
-func getPublicKey() {
-	b, err := ioutil.ReadFile("keys/public_key.txt")
-	if err != nil {
-		fmt.Print(err)
-	}
+// func getPublicKey() {
+// 	b, err := ioutil.ReadFile("keys/public_key.txt")
+// 	if err != nil {
+// 		fmt.Print(err)
+// 	}
 
-	publicKey = string(b)
-}
+// 	publicKey = string(b)
+// }
 
 // Generates a SHA256 digest from a string
 func getSHA256Digest(data string) []byte {
@@ -96,7 +106,7 @@ func prepStringToSign(reqTarget string, hdrs map[string]interface{}) string {
 
 // Generates a base64 encoded RSA SHA256 signed string y using
 // the assigned privateKey to sign the request
-func getRSASigSHA256b64Encode(data string) string {
+func getRSASigSHA256b64Encode(data string, privateKey *rsa.PrivateKey) string {
 	digest := getSHA256Digest(data)
 
 	signature, err := rsa.SignPKCS1v15(nil, privateKey, crypto.SHA256, digest)
@@ -111,7 +121,7 @@ func getRSASigSHA256b64Encode(data string) string {
 // Prepares the Intersight authorization string by properly
 // formatting each of the required components and returning
 // it as a string
-func getAuthHeader(hdrs map[string]interface{}, signedMsg string) string {
+func getAuthHeader(hdrs map[string]interface{}, signedMsg string, publicKey string) string {
 	var keys []string
 
 	authStr := "Signature"
@@ -147,45 +157,57 @@ func getGMTDate() string {
 // a body (if necessary), MOID, name (if MOID is not known),
 // and an HTTP proxy (if required), will return an HTTP
 // *Response with the outcome of the API call
-func RFC3447Auth(httpMethod string, resourcePath string, queryParams url.Values, body map[string]interface{}, moid string, name string) *http.Request {
+// func RFC3447Auth(httpMethod string, resourcePath string, queryParams url.Values, body map[string]interface{}, moid string, name string) *http.Request {
+func RFC3447Auth(api model.API, method string, queryParams url.Values, body string) (*http.Request, error) {
 	var bodyString string
+	var queryPath string
 
-	host, err := url.Parse("https://intersight.com/api/v1")
+	resourcePath := api.Path
+
+	device, deviceErr := account.GetDeviceFromDB(api.DeviceAccount)
+
+	if deviceErr != nil {
+		log.Print(deviceErr)
+		fmt.Println("Errored when creating the HTTP request!")
+		return nil, deviceErr
+	}
+
+	host, err := url.Parse(device.BaseURL)
 	if err != nil {
 		panic("Cannot parse *host*!")
 	}
 
 	targetHost := host.Hostname()
 	targetPath := host.RequestURI()
-	queryPath := ""
-	method := strings.ToUpper(httpMethod)
+	// method := strings.ToUpper(httpMethod)
+	targetMethod := strings.ToUpper(method)
 
 	// Verify an accepted HTTP verb was chosen
-	if !httpVerbs[method] {
+	if !httpVerbs[targetMethod] {
 		fmt.Println("Please select a valid HTTP verb (GET/POST/PATCH/DELETE)")
 	}
 
 	// Verify the resource path isn't empy & is a valid String type
-	if len(resourcePath) == 0 {
+	if len(api.Path) == 0 {
 		fmt.Println("The *resourcePath* value is required")
 	}
 
 	// Verify the MOID is of proper length if it is set
-	if len(moid) != 0 && len([]byte(moid)) != 24 {
-		fmt.Println("Invalid *moid* value!")
-	}
+	// if len(moid) != 0 && len([]byte(moid)) != 24 {
+	// 	fmt.Println("Invalid *moid* value!")
+	// }
 
 	// Encode Query Params and append to resourcePath
-	if len(queryParams) != 0 && method == "GET" {
+	if len(queryParams) != 0 && targetMethod == "GET" {
 		encodedQuery := queryParams.Encode()
 		queryPath = strings.Replace(encodedQuery, "+", "%20", -1)
 		resourcePath += "?" + queryPath
 	}
 
 	// Convert BODY to a String
-	if method == "POST" || method == "PATCH" {
-		if len(body) > 0 {
-			bodyBytes, _ := json.Marshal(body)
+	if targetMethod == "POST" || targetMethod == "PATCH" {
+		if len(api.Body) > 0 {
+			bodyBytes, _ := json.Marshal(api.Body)
 			bodyString = string(bodyBytes)
 		} else {
 			fmt.Println("The *body* value must be set with \"POST/PATCH!\"")
@@ -194,27 +216,27 @@ func RFC3447Auth(httpMethod string, resourcePath string, queryParams url.Values,
 	}
 
 	// Find MOID by NAME if MOID is not set
-	if method == "PATCH" || method == "DELETE" {
-		if len(moid) == 0 {
-			fmt.Println("Must set either *moid* with \"PATCH/DELETE!\"")
-		}
-	}
+	// if method == "PATCH" || method == "DELETE" {
+	// 	if len(moid) == 0 {
+	// 		fmt.Println("Must set either *moid* with \"PATCH/DELETE!\"")
+	// 	}
+	// }
 
 	// Append MOID to URL
-	if len(moid) != 0 && method != "POST" {
-		resourcePath += "/" + moid
-	}
+	// if len(moid) != 0 && method != "POST" {
+	// 	resourcePath += "/" + moid
+	// }
 
 	// Concatenate URLs for headers
 	targetURL := host.String() + resourcePath
-	requestTarget := method + " " + targetPath + resourcePath
+	requestTarget := targetMethod + " " + targetPath + resourcePath
 
 	// Get the date in GMT format
 	currDate := getGMTDate()
 
 	// Load public/private keys
-	getPrivateKey()
-	getPublicKey()
+	privateKey := loadPrivateKey(device.AuthObj["privateKey"].(string))
+	publicKey := device.AuthObj["publicKey"].(string)
 
 	// Generate Body Digest
 	bodyDigest := getSHA256Digest(bodyString)
@@ -229,8 +251,8 @@ func RFC3447Auth(httpMethod string, resourcePath string, queryParams url.Values,
 
 	// Generate authorization string
 	stringToSign := prepStringToSign(requestTarget, authHeader)
-	b64SignedMsg := getRSASigSHA256b64Encode(stringToSign)
-	headerAuth := getAuthHeader(authHeader, b64SignedMsg)
+	b64SignedMsg := getRSASigSHA256b64Encode(stringToSign, privateKey)
+	headerAuth := getAuthHeader(authHeader, b64SignedMsg, publicKey)
 
 	// Generate the HTTP requests header
 	requestHeader := map[string]string{
@@ -242,12 +264,12 @@ func RFC3447Auth(httpMethod string, resourcePath string, queryParams url.Values,
 	}
 
 	// Create HTTP request
-	req, err := http.NewRequest(method, targetURL, strings.NewReader(bodyString))
+	req, err := http.NewRequest(targetMethod, targetURL, strings.NewReader(bodyString))
 
 	if err != nil {
 		log.Print(err)
 		fmt.Println("Errored when creating the HTTP request!")
-		return nil
+		return nil, nil
 	}
 
 	// Append headers to HTTP request
@@ -258,5 +280,8 @@ func RFC3447Auth(httpMethod string, resourcePath string, queryParams url.Values,
 	// Add query params and call HTTP request
 	req.URL.RawQuery = queryPath
 
-	return req
+	fmt.Println("RFC3447 REQUEST:")
+	fmt.Println(req)
+
+	return req, nil
 }

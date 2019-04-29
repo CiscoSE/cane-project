@@ -12,17 +12,21 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
-	"github.com/mongodb/mongo-go-driver/mongo/options"
+	//"github.com/mongodb/mongo-go-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/cors"
 	"github.com/go-chi/jwtauth"
 	"github.com/mitchellh/mapstructure"
-	"github.com/mongodb/mongo-go-driver/bson/primitive"
+
+	//"github.com/mongodb/mongo-go-driver/bson/primitive"
 	"github.com/tidwall/gjson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // Router Variable
@@ -48,7 +52,7 @@ func Routers() {
 		// AllowedOrigins: []string{"https://foo.com"}, // Use this to allow specific origin hosts
 		AllowedOrigins: []string{"*"},
 		// AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
@@ -59,12 +63,11 @@ func Routers() {
 
 	// Public Default Routes
 	Router.Post("/login", account.Login)
-	// Router.Post("/apiTest", TestCallAPI)
 	// Router.Get("/testPath/*", TestPath)
 	Router.Post("/testJSON", JSONTest)
 	Router.Post("/testXML", XMLTest)
 	Router.Post("/testGJSON", TestGJSON)
-	// Router.Get("/loadAPI/{account}/{name}", api.LoadAPI)
+	Router.Get("/testQuery", TestQuery)
 
 	// Private Default Routes
 	Router.Group(func(r chi.Router) {
@@ -101,9 +104,8 @@ func Routers() {
 		r.Get("/workflow", workflow.GetWorkflows)
 		r.Get("/workflow/{workflowname}", workflow.GetWorkflow)
 		r.Post("/workflow", workflow.CreateWorkflow)
-		// r.Patch("/workflow/{workflowname}", workflow.UpdateWorkflow)
+		r.Patch("/workflow/{workflowname}", workflow.UpdateWorkflow)
 		r.Delete("/workflow/{workflowname}", workflow.DeleteWorkflow)
-		// FIX THIS LATER
 		r.Post("/workflow/{workflowname}", workflow.CallWorkflow)
 
 		/* /claim */
@@ -117,6 +119,7 @@ func Routers() {
 		/* Old Routes (Testing) */
 		// r.Post("/addRoute", AddRoutes)
 		r.Post("/parseVars", ParseVars)
+		r.Post("/test/{devicename}/{apiname}", TestCallAPI)
 		// r.Post("/validateToken", account.ValidateUserToken)
 		// r.Patch("/updateToken/{user}", account.RefreshToken)
 	})
@@ -208,6 +211,7 @@ func PassThroughAPI(w http.ResponseWriter, r *http.Request) {
 
 	uri := chi.URLParam(r, "*")
 	device := chi.URLParam(r, "devicename")
+	queryParams := r.URL.Query()
 	routeContext := chi.RouteContext(r.Context())
 	routePattern := routeContext.RoutePattern()
 	routeMethod := routeContext.RouteMethod
@@ -224,13 +228,15 @@ func PassThroughAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newAPI.DeviceAccount = device
-	newAPI.Method = routeMethod
+	// newAPI.Method = routeMethod
+
+	fmt.Println("Pass Through Method: " + routeMethod)
 
 	if len(uri) > 0 {
-		newAPI.URL += "/"
+		newAPI.Path += "/"
 	}
 
-	newAPI.URL += uri
+	newAPI.Path += uri
 	newAPI.Body = bodyString
 
 	if model.IsJSON(bodyString) {
@@ -241,7 +247,7 @@ func PassThroughAPI(w http.ResponseWriter, r *http.Request) {
 		newAPI.Type = "error"
 	}
 
-	resp, err := api.CallAPI(newAPI)
+	resp, err := api.CallAPI(newAPI, routeMethod, queryParams, nil, bodyString)
 
 	if err != nil {
 		util.RespondWithError(w, http.StatusBadRequest, err.Error())
@@ -316,17 +322,37 @@ func ValidateRoute(route model.RouteValue) bool {
 
 // TestCallAPI Function
 func TestCallAPI(w http.ResponseWriter, r *http.Request) {
-	// var respBody map[string]interface{}
-	var apiInput map[string]interface{}
+	var apiBody map[string]interface{}
+	var apiResponse map[string]interface{}
 	var callAPI model.API
 
-	json.NewDecoder(r.Body).Decode(&apiInput)
+	deviceName := chi.URLParam(r, "devicename")
+	apiName := chi.URLParam(r, "apiname")
 
-	targetFilter := primitive.M{
-		"name": apiInput["apiName"],
+	bodyBytes, bodyErr := ioutil.ReadAll(r.Body)
+
+	if bodyErr != nil {
+		util.RespondWithError(w, http.StatusBadRequest, bodyErr.Error())
+		return
 	}
 
-	targetAPI, targetErr := database.FindOne("apis", apiInput["deviceAccount"].(string), targetFilter)
+	bodyString := string(bodyBytes)
+
+	if len(bodyString) > 0 {
+		decodeBodyErr := json.Unmarshal(bodyBytes, &apiBody)
+
+		if decodeBodyErr != nil {
+			fmt.Println(decodeBodyErr)
+			util.RespondWithError(w, http.StatusBadRequest, "error decoding json body")
+			return
+		}
+	}
+
+	targetFilter := primitive.M{
+		"name": apiName,
+	}
+
+	targetAPI, targetErr := database.FindOne("apis", deviceName, targetFilter)
 
 	if targetErr != nil {
 		fmt.Println(targetErr)
@@ -336,30 +362,32 @@ func TestCallAPI(w http.ResponseWriter, r *http.Request) {
 
 	mapstructure.Decode(targetAPI, &callAPI)
 
-	apiMap := apiInput["apiMap"].(map[string]interface{})
-
-	// fmt.Println(apiMap)
-
-	tempAPI := targetAPI["body"].(string)
-
-	// fmt.Println(tempAPI)
-
-	for key, val := range apiMap {
-		tempAPI = strings.Replace(tempAPI, key, val.(string), 1)
+	if len(bodyString) > 0 {
+		callAPI.Body = bodyString
 	}
 
-	callAPI.Body = tempAPI
+	resp, respErr := api.CallAPI(callAPI, "", nil, nil, bodyString)
 
-	// resp := api.CallAPI(callAPI)
+	if respErr != nil {
+		fmt.Println(respErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error calling api")
+		return
+	}
 
-	// defer resp.Body.Close()
-	// respBody, _ := ioutil.ReadAll(resp.Body)
+	defer resp.Body.Close()
+	respBytes, _ := ioutil.ReadAll(resp.Body)
 
-	// fmt.Println(string(respBody))
+	fmt.Println(string(respBytes))
 
-	respBody := ""
+	decodeRespErr := json.Unmarshal(respBytes, &apiResponse)
 
-	util.RespondwithJSON(w, http.StatusCreated, string(respBody))
+	if decodeRespErr != nil {
+		fmt.Println(decodeRespErr)
+		util.RespondWithError(w, http.StatusBadRequest, "error decoding json response")
+		return
+	}
+
+	util.RespondwithJSON(w, http.StatusOK, apiResponse)
 }
 
 // APLTest Function
@@ -455,10 +483,10 @@ func ClaimTest(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("Loading fake step data...")
 
-	testResult.APIAccount = "testaccount"
-	testResult.APICall = "testcall"
+	testResult.Account = "testaccount"
+	// testResult.API = "testcall"
 	testResult.Error = ""
-	testResult.ReqBody = "{req_body}"
+	// testResult.ReqBody = "{req_body}"
 	testResult.ResBody = "{res_body}"
 	testResult.Status = 2
 
@@ -472,4 +500,13 @@ func ClaimTest(w http.ResponseWriter, r *http.Request) {
 	claim.Save()
 
 	util.RespondwithJSON(w, http.StatusCreated, map[string]interface{}{"claim": claim})
+}
+
+// TestQuery Function
+func TestQuery(w http.ResponseWriter, r *http.Request) {
+	query := url.Values{}
+
+	query = r.URL.Query()
+
+	fmt.Println(query)
 }

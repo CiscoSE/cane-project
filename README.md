@@ -5,13 +5,13 @@ Cisco API Normalization Engine - Unify & Normalize API's across multiple Cisco p
 
 ## Business/Technical Challenge
 
-With IT teams turning more and more to API’s to build, configure, and maintain their complex infrastructure, the explosion of API standards, formats, and authentication methods have made consuming them in a holistic fashion extremely difficult. Despite the fact that API’s were created to help us automate repetitive tasks that can be easily codified, one of the biggest hurdles for API’s is that there isn't a true standard.  Every vendor has their own, and sometimes several distinct API’s and further complicate things, the way that you authenticate to them, even within a single vendors API set, could be completely different. All of these caveats undermine the goal of automation - causing more work, not less - as was the original intent.
+With IT teams turning more and more to API’s to build, configure, and maintain their complex infrastructure, the explosion of API standards, formats, and authentication methods have made consuming them in a holistic fashion extremely difficult. Despite the fact that API’s were created to help us automate repetitive tasks that can be easily codified, one of the biggest hurdles for API’s is that there isn't a true standard.  Every vendor has their own version and sometimes several distinct API types to leverage. Further complicating things is the way that tools and users authenticate to them, even within a single vendors API set, could be completely different. All of these caveats undermine the goal of automation - causing more work, not less - as was the original intent.
 
 ## Proposed Solution
 
-Introducing CANE - an API Aggregation platform that can consume multiple underlying Cisco (and other vendor) API’s, and allow you to build your own business-centric API’s that make sense for your organization. CANE promotes programmability and automation via a single, vendor agnostic platform.  Using a composable API engine, our customer can create a mapping between multiple underlying platform API’s (e.g. NX-API), and chain them together to create an outcome, not just an API response.
+Introducing CANE - an API Aggregation platform that can consume multiple underlying Cisco (and other vendor) API’s and allow the creation of a business-centric compilation of API’s that make operational sense for your organization. CANE promotes programmability and automation via a single, vendor agnostic platform.  Using a composable API engine, CANE can create a mapping between multiple underlying platform API’s (e.g. NX-API), and chain them together to create an outcome, not just an API response.
 
-Authentication:
+**Authentication:**
 
 In order to maintain security, many API’s use some sort of authentication to protect access to sensitive information on the device or for changing the device configuration.  However, this security can also be an unreasonable hindrance to the API's usefulness...the frequency of re-authentications, distribution of credentials, etc.
 
@@ -19,9 +19,9 @@ CANE can act as both the authentication provider and authentication subscriber. 
 
 As an authentication subscriber, in the background, CANE will also maintain active Authentications into each vendor device, renewing session tokens automatically as needed.  This ensures that the endpoint API is always available for consumption - the first time and every time.  If the API requires an API key, CANE will centrally maintain all of your API keys on your behalf.  This ensures that there is a single, protected holder of the API key.  When a user authenticates into CANE with their username and password, they are given the right to use the API key while never having it within their possession.  If the API key needs to be changed due to a periodic refresh or a compromise of the key, no problem.
 
-Business-centric API’s:
+**Business-centric API’s:**
 
-The reality is that we rarely just call a SINGLE API. Multiple API calls are require to complete a business process, whether that is turning up a new branch location, or provisioning a new network across multiple different switch & routing platforms. CANE is centered around the idea of a workflow. Workflows allow you to chain multiple disparate API’s calls together, mapping outputs of some API’s, to inputs of others. Composing unique business API’s in this fashion allows you consume your infrastructure in a much more effective way, and provide your company API’s that deliver on YOUR needs.
+The reality is that we rarely just call a SINGLE API. Multiple API calls are require to complete a business process, whether that is turning up a new branch location, or provisioning a new network across multiple different switch & routing platforms. CANE is centered around the idea of a workflow. Workflows allow a chain of multiple disparate API calls to be organized together, mapping outputs of some API’s, to inputs of others. Composing unique business API’s in this fashion enables the operation of your infrastructure in a much more effective and efficient way to continuously deliver on business needs.
 
 
 ### Cisco Products Technologies/ Services
@@ -41,7 +41,8 @@ Our solution will complement all Cisco technologies that leverage RESTful APIs, 
 
 * Matthew Garrett <matgarre@cisco.com> - Commercial
 * Kevin Redmon <kredmon@cisco.com> - Commerical
-* Konrad Reszka <kreszka@cisco.com> - Public Sector
+* Konrad Reszka <kreszka@cisco.com> - Commercial
+* Kurt Chapman <kchapman@cisco.com> - Public Sector
 
 ## Solution Components
 

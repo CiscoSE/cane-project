@@ -10,9 +10,12 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
+	"strings"
 
-	"github.com/mongodb/mongo-go-driver/bson/primitive"
+	//"github.com/mongodb/mongo-go-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // ProxyURL Variable
@@ -20,6 +23,9 @@ var ProxyURL string
 
 // IgnoreSSL Global Setting
 var IgnoreSSL bool
+
+// DebugEnable Global Setting
+var DebugEnable bool
 
 // XMLNode Struct
 type XMLNode struct {
@@ -81,7 +87,7 @@ func RespondWithError(w http.ResponseWriter, code int, msg string) {
 
 // JSONPrettyPrint Function
 // Formats JSON into a much more easily readable format
-// by proeprly indenting with two spaces where needed
+// by properly indenting with two spaces where needed
 // and returns it as a string
 func JSONPrettyPrint(input string) string {
 	var output bytes.Buffer
@@ -144,4 +150,21 @@ func StructToMap(iface interface{}) map[string]interface{} {
 	}
 
 	return newMap
+}
+
+// IsVar Function
+func IsVar(data string) bool {
+	if strings.HasPrefix(data, "{{") && strings.HasSuffix(data, "}}") {
+		return true
+	}
+
+	return false
+}
+
+// GetVariables Function
+func GetVariables(data string) []string {
+	regex := regexp.MustCompile(`{{[a-zA-Z]+}}`)
+	matches := regex.FindAllString(data, -1)
+
+	return matches
 }

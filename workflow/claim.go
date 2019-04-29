@@ -13,9 +13,11 @@ import (
 
 	"github.com/fatih/structs"
 
-	"github.com/mongodb/mongo-go-driver/bson/primitive"
-	"github.com/mongodb/mongo-go-driver/mongo/options"
+	//"github.com/mongodb/mongo-go-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	//"github.com/mongodb/mongo-go-driver/mongo/options"
 	"github.com/segmentio/ksuid"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // Claim Alias
@@ -27,7 +29,7 @@ func GenerateClaim() Claim {
 
 	claim.ClaimCode = ksuid.New().String()
 	claim.WorkflowResults = make(map[string]model.StepResult)
-	claim.Timestamp = time.Now().String()
+	claim.Timestamp = time.Now().UTC().Format(time.RFC3339)
 	claim.CurrentStatus = 0
 
 	return claim
@@ -45,7 +47,21 @@ func (c *Claim) Save() {
 
 	delete(replace, "_id")
 
-	replaceVal, replaceErr := database.FindAndReplace("workflows", "claims", filter, replace)
+	// replaceVal, replaceErr := database.FindAndReplace("workflows", "claims", filter, replace)
+
+	// if replaceErr != nil {
+	// 	fmt.Println(replaceErr)
+	// 	return
+	// }
+
+	deleteErr := database.Delete("workflows", "claims", filter)
+
+	if deleteErr != nil {
+		fmt.Println(deleteErr)
+		return
+	}
+
+	replaceVal, replaceErr := database.Save("workflows", "claims", replace)
 
 	if replaceErr != nil {
 		fmt.Println(replaceErr)
@@ -63,13 +79,11 @@ func GetClaims(w http.ResponseWriter, r *http.Request) {
 	foundVal, foundErr := database.FindAll("workflows", "claims", primitive.M{}, opts)
 
 	if foundErr != nil {
-		fmt.Println(foundErr)
 		util.RespondWithError(w, http.StatusBadRequest, "no claims found")
 		return
 	}
 
 	if len(foundVal) == 0 {
-		fmt.Println(foundVal)
 		util.RespondWithError(w, http.StatusBadRequest, "empty claims list")
 		return
 	}
@@ -88,7 +102,6 @@ func GetClaim(w http.ResponseWriter, r *http.Request) {
 	foundVal, foundErr := GetClaimFromDB(claimCode)
 
 	if foundErr != nil {
-		fmt.Println(foundErr)
 		util.RespondWithError(w, http.StatusBadRequest, "claim code not found")
 		return
 	}

@@ -147,21 +147,11 @@ func (x *XMLNode) XMLtoJSONRecursive() map[string]interface{} {
 
 	for i := range x.Attrs {
 		attrItems[x.Attrs[i].Name.Local] = x.Attrs[i].Value
-
-		// attrItem := map[string]interface{}{
-		// 	x.Attrs[i].Name.Local: x.Attrs[i].Value,
-		// }
-
-		// attrList = append(attrList, attrItem)
 	}
 
 	if len(attrItems) > 0 {
-		currNode["attr:"] = attrItems
+		currNode["attr"] = attrItems
 	}
-
-	// if len(attrList) > 0 {
-	// 	currNode["-attrs:"] = attrList
-	// }
 
 	contentString := string(x.Content)
 
@@ -178,11 +168,12 @@ func (x *XMLNode) XMLtoJSONRecursive() map[string]interface{} {
 			xmlErr := xml.Unmarshal([]byte(newContent), &cdataNode)
 
 			if xmlErr != nil {
-				panic(xmlErr)
-			}
+				currNode["cdata"] = newContent
+			} else {
 
-			currNode["cdata"] = map[string]interface{}{
-				cdataNode.XMLName.Local: cdataNode.XMLtoJSONRecursive(),
+				currNode["cdata"] = map[string]interface{}{
+					cdataNode.XMLName.Local: cdataNode.XMLtoJSONRecursive(),
+				}
 			}
 		} else {
 			currNode["data"] = content

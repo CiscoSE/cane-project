@@ -6,14 +6,19 @@ import (
 	"log"
 	"time"
 
-	"github.com/mongodb/mongo-go-driver/mongo/options"
+	//"github.com/mongodb/mongo-go-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/mitchellh/mapstructure"
-	"github.com/mongodb/mongo-go-driver/bson/primitive"
+	//"github.com/mongodb/mongo-go-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
-	"github.com/mongodb/mongo-go-driver/bson"
-	"github.com/mongodb/mongo-go-driver/mongo"
-	"github.com/mongodb/mongo-go-driver/mongo/readpref"
+	//"github.com/mongodb/mongo-go-driver/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	//"github.com/mongodb/mongo-go-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo"
+	//"github.com/mongodb/mongo-go-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
 var client *mongo.Client
@@ -222,7 +227,8 @@ func init() {
 
 	fmt.Print("Creating database connection...")
 
-	client, err = mongo.NewClient("mongodb://localhost:27017")
+	// client, err = mongo.NewClient("mongodb://localhost:27017")
+	client, err = mongo.NewClient(options.Client().ApplyURI("mongodb://localhost:27017"))
 
 	if err != nil {
 		fmt.Println("[FAIL]")

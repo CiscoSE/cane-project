@@ -10,13 +10,12 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/mongodb/mongo-go-driver/bson/primitive"
 )
 
 // SessionAuth Function
-func SessionAuth(api model.API) (*http.Request, error) {
+func SessionAuth(api model.API, method string, queryParams url.Values) (*http.Request, error) {
 	device, deviceErr := account.GetDeviceFromDB(api.DeviceAccount)
+	var queryPath string
 
 	if deviceErr != nil {
 		log.Print(deviceErr)
@@ -24,20 +23,26 @@ func SessionAuth(api model.API) (*http.Request, error) {
 		return nil, deviceErr
 	}
 
-	host, err := url.Parse(device.URL)
+	host, err := url.Parse(device.BaseURL)
 	if err != nil {
 		panic("Cannot parse *host*!")
 	}
 
 	fmt.Println("SCHEME: ", host.Scheme)
 	fmt.Println("HOSTNAME: ", host.Hostname())
-	fmt.Println("ENDPOINT: ", api.URL)
+	fmt.Println("ENDPOINT: ", api.Path)
 
-	targetMethod := strings.ToUpper(api.Method)
+	targetMethod := strings.ToUpper(method)
 
 	fmt.Println("METHOD: ", targetMethod)
 
-	targetURL := host.String() + api.URL
+	// Encode Query Params and append to resourcePath
+	if len(queryParams) != 0 && targetMethod == "GET" {
+		encodedQuery := queryParams.Encode()
+		queryPath = "?" + strings.Replace(encodedQuery, "+", "%20", -1)
+	}
+
+	targetURL := host.String() + api.Path + queryPath
 
 	fmt.Println("TARGETURL: ", targetURL)
 
@@ -51,19 +56,22 @@ func SessionAuth(api model.API) (*http.Request, error) {
 
 	fmt.Println("REQ: ", req)
 
-	filter := primitive.M{
-		"_id": primitive.ObjectID(device.AuthObj),
-	}
+	// filter := primitive.M{
+	// 	"_id": primitive.ObjectID(device.AuthObj),
+	// }
 
-	foundVal, foundErr := database.FindOne("auth", device.AuthType, filter)
+	// foundVal, foundErr := database.FindOne("auth", device.AuthType, filter)
 
-	if foundErr != nil {
-		fmt.Println(foundErr)
-		return nil, foundErr
-	}
+	// if foundErr != nil {
+	// 	fmt.Println(foundErr)
+	// 	return nil, foundErr
+	// }
 
-	apiHeader := foundVal["header"].(string)
-	apiKey := foundVal["key"].(string)
+	// apiHeader := foundVal["header"].(string)
+	// apiKey := foundVal["key"].(string)
+
+	apiHeader := device.AuthObj["header"].(string)
+	apiKey := device.AuthObj["key"].(string)
 
 	fmt.Println("APIHEADER: ", apiHeader)
 	fmt.Println("APIKEY: ", apiKey)
